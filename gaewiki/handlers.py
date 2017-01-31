@@ -1,11 +1,15 @@
+# -*- coding: utf-8 -*-
 # encoding=utf-8
 
 import logging
 import os
 import traceback
 import urllib
+import re
 
 from django.utils import simplejson
+from hashlib import md5
+from google.appengine.ext import db
 from google.appengine.api import memcache
 from google.appengine.api import taskqueue
 from google.appengine.api import users
@@ -49,7 +53,7 @@ class RequestHandler(webapp.RequestHandler):
         if not access.can_see_most_pages(users.get_current_user(), users.is_current_user_admin()):
             raise Forbidden
 
-    def show_error_page(self, status_code):
+    def show_error_page(self, status_code, message = None):
         defaults = {
             400: '<p class="alert alert-info">Bad request.</p>',
             403: '<p class="alert alert-warning">Access denied, try logging in.</p>',
@@ -69,15 +73,15 @@ class RequestHandler(webapp.RequestHandler):
                 "error_class": e.__class__.__name__,
             }), "application/json")
         elif type(e) == BadRequest:
-            self.show_error_page(400)
+            self.show_error_page(400, str(e))
         elif type(e) == Forbidden:
-            self.show_error_page(403)
+            self.show_error_page(403, str(e))
         elif type(e) == NotFound:
-            self.show_error_page(404)
+            self.show_error_page(404, str(e))
         elif debug_mode:
             return webapp.RequestHandler.handle_exception(self, e, debug_mode)
         else:
-            self.show_error_page(500)
+            self.show_error_page(500, str(e))
 
     def redirect(self, url):
         if self.is_ajax():
@@ -320,8 +324,13 @@ class BackLinksHandler(RequestHandler):
         return 'BackLinks:' + self.title
 
     def get_content(self):
+        if not self.title:
+            raise NotFound("No backlinks to non-existant page.")
         page = model.WikiContent.get_by_title(self.title)
-        return view.get_backlinks(page, page.get_backlinks())
+        if page:
+            return view.get_backlinks(page, page.get_backlinks())
+        else:
+            raise NotFound("No backlinks to non-existant page.")
 
 
 class UsersHandler(RequestHandler):
@@ -473,14 +482,33 @@ class ImageUploadHandler(RequestHandler, blobstore_handlers.BlobstoreUploadHandl
             raise Forbidden
         # After the file is uploaded, grab the blob key and return the image URL.
         upload_files = self.get_uploads('file')  # 'file' is file upload field in the form
+        #
+        # the below line can be removed once this bug is fixed by google:
+        # https://code.google.com/p/googleappengine/issues/detail?id=2749
+        upload_files = blobstore.BlobInfo.get([blob.key() for blob in upload_files])
+        #
         blob_info = upload_files[0]
-
-        image_page_url = "/w/image/view?key=" + str(blob_info.key())
+        last_upload = model.WikiUpload.get_by_name(blob_info.filename)
+        if last_upload:
+            last_upload.is_latest = False
+            last_upload.put()
+        upload = model.WikiUpload(blob_key=str(blob_info.key()),
+                                  user = model.WikiUser.get_or_create(users.get_current_user()),
+                                  short_key = md5(str(blob_info.key())).hexdigest(),
+                                  content_type=blob_info.content_type,
+                                  filename=blob_info.filename,
+                                  size=blob_info.size,
+                                  is_latest=True
+                                  )
+        upload.put()
+        image_page_url = "/w/file/view/" + upload.short_key
         return self.redirect(image_page_url)
-
 
 class ImageServeHandler(RequestHandler):
     def get(self):
+        if not access.can_upload_image(users.get_current_user(), users.is_current_user_admin()):
+            raise Forbidden
+
         img = images.Image.get_by_key(self.request.get("key"))
 
         data = {
@@ -502,10 +530,63 @@ class ImageServeHandler(RequestHandler):
 
 class ImageListHandler(RequestHandler):
     def get(self):
+        if not access.can_upload_image(users.get_current_user(), users.is_current_user_admin()):
+            raise Forbidden
         lst = images.Image.find_all()
         html = view.view_image_list(lst, users.get_current_user(),
             users.is_current_user_admin())
         self.reply(html, "text/html")
+
+class FileListHandler(RequestHandler):
+    def get(self):
+        if not access.can_upload_image(users.get_current_user(), users.is_current_user_admin()):
+            raise Forbidden
+        lst = model.WikiUpload.get_recently_added(100)
+        html = view.view_file_list(lst, users.get_current_user(),
+            users.is_current_user_admin())
+        self.reply(html, "text/html")
+
+class FileDeleteHandler(RequestHandler):
+    def post(self):
+        if not users.is_current_user_admin():
+            raise Forbidden
+        uploads = model.WikiUpload.gql("WHERE short_key IN :1", self.request.get_all("short_key")).fetch(1000)
+        for upload in uploads:
+            blobstore.delete(upload.blob_key)
+        db.delete(uploads)
+        self.redirect("/w/file/list")
+
+class FileViewHandler(RequestHandler):
+    def get(self, key = None):
+        if self.request.get('key'):
+            key = self.request.get('key')
+        elif key is None:
+            raise NotFound("File name not provided with request...")
+        if not access.can_see_most_pages(users.get_current_user(), users.is_current_user_admin()):
+            raise Forbidden
+        key = urllib.unquote(key).decode('utf-8') # same thing needed for
+        f = model.WikiUpload.get_by_key(key)
+        if not f:
+            f = model.WikiUpload.get_by_name(key)
+        if not f:
+            raise NotFound("Now the file definately not found...")
+        html = view.view_file(f, user=users.get_current_user(),
+                               is_admin=users.is_current_user_admin()
+                               )
+        self.reply(html, 'text/html')
+
+class FileDownloadHandler(blobstore_handlers.BlobstoreDownloadHandler):
+    """
+    no longer used as it can easily be done with <a href="" download="filename">
+    """
+    def get(self, key):
+        if not access.can_see_most_pages(users.get_current_user(), users.is_current_user_admin()):
+            raise Forbidden
+        upload = model.WikiUpload.get_by_key(key)
+        if not upload:
+            self.error(404)
+        else:
+            self.send_blob(upload.blob_key, save_as=upload.filename)
 
 
 handlers = [
@@ -519,9 +600,18 @@ handlers = [
     ('/w/data/import$', DataImportHandler),
     ('/w/edit$', EditHandler),
     ('/w/history$', PageHistoryHandler),
+
     ('/w/image/upload', ImageUploadHandler),
     ('/w/image/view', ImageServeHandler),
     ('/w/image/list', ImageListHandler),
+
+    ('/w/file/upload', ImageUploadHandler),
+    ('/w/file/list', FileListHandler),
+    ('/w/file/delete', FileDeleteHandler),
+    ('/w/file/view/(.*)', FileViewHandler),
+    (r'/File\:(.*)', FileViewHandler),
+    ('/w/file/download/(.*)', FileDownloadHandler),
+
     ('/w/index$', IndexHandler),
     ('/w/index\.rss$', IndexFeedHandler),
     ('/w/interwiki$', InterwikiHandler),

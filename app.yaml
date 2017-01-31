@@ -1,5 +1,5 @@
-application: bgaewiki
-version: 0-1
+#application: bgaewiki
+#version: 0-1
 runtime: python27
 threadsafe: yes
 api_version: 1
@@ -14,7 +14,10 @@ handlers:
   upload: gaewiki/static/favicon.ico
 - url: .*
   script: gaewiki.application
+  secure: always
 
 libraries:
 - name: django
   version: "1.2"
+- name: webob
+  version: "1.2.3"

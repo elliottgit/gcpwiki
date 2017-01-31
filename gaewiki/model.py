@@ -1,12 +1,16 @@
+# -*- coding: utf-8 -*-
 # encoding=utf-8
 
 import datetime
 import logging
 import random
 import re
+import cgi
 
 from google.appengine.api import users
 from google.appengine.ext import db
+from google.appengine.api.images import get_serving_url
+from google.appengine.ext import blobstore
 
 import settings
 import util
@@ -68,6 +72,109 @@ class WikiUserReference(db.ReferenceProperty):
 
     def validate(self, value):
         return value
+
+class WikiUpload(db.Model):
+    user = WikiUserReference()
+    created = db.DateTimeProperty(auto_now_add=True)
+    short_key = db.StringProperty(required=True)
+    blob_key = db.StringProperty(required=True)
+    content_type = db.StringProperty(required=False)
+    filename = db.StringProperty(required=False)
+    size = db.IntegerProperty(required=False)
+    is_latest = db.BooleanProperty(default=True)
+
+    # the rest of info in blob_storage
+    def __init__(self, *args, **kwargs):
+        super(WikiUpload, self).__init__(*args, **kwargs)
+        self._blob = None
+
+    @property
+    def blob(self):
+        if self._blob is not None:
+            return self._blob
+        else:
+            if self.__dict__.has_key('blob_key') and self.blob_key is not None:
+                self._blob = blobstore.BlobInfo(blobstore.BlobKey(self.blob_key))
+                return self._blob
+            else:
+                return None
+
+    @property
+    def size_fmt(self):
+        return util.sizeof_fmt(self.size)
+
+    @property
+    def is_image(self):
+        return self.content_type[:5] == "image"
+
+    @property
+    def is_audio(self):
+        return self.content_type[:5] == "audio"
+
+    @property
+    def is_video(self):
+        return self.content_type[:5] == "video"
+
+    @property
+    def thumb_url(self):
+        if self.is_image:
+            url = get_serving_url(self.blob_key, 25, True)
+            #return url
+            if url.startswith('http://'):
+                url = url[5:]
+            return url
+        else:
+            return "//google.com/"
+
+    @classmethod
+    def get_recently_added(cls, limit=100):
+        return cls.all().order('-created').fetch(limit)
+
+    @classmethod
+    def get_by_key(cls, key):
+        return cls.gql("WHERE short_key = :1", key).get()
+
+    @classmethod
+    def get_by_name(cls, name):
+        return cls.gql("WHERE is_latest = TRUE AND filename = :1", name).get()
+
+    @classmethod
+    def find_all(cls, limit=100):
+        all = blobstore.BlobInfo.all().fetch(limit)
+        return [cls(i) for i in all]
+
+
+    def get_url(self, size=None, crop=False):
+        """Returns a URL for accessing the image/file with specified parameters.
+        Size limits width and height, crop=True makes it square."""
+        url = get_serving_url(self.blob_key, size, crop)
+        if url.startswith('http://'):
+            url = url[5:]
+        return url
+
+    def get_code(self, size=None, crop=False):
+        """Returns the wiki code to embed this file."""
+        if self.is_image:
+            code = "Image:" + self.filename
+            if size is not None:
+                code += ";size=" + str(size)
+            if crop:
+                code += ";crop"
+        elif self.is_audio:
+            code = "Audio:" + self.filename
+        elif self.is_video:
+            code = "Video:" + self.filename
+        else:
+            code = "File:" + self.filename
+        return "[[" + code + "]]"
+
+    def get_html(self, tag = "File", title = "", size = None, crop = False, align = "left"):
+        attrs = "src='%s' alt='%s'" % (self.get_url(size, crop),
+                                       cgi.escape(self.filename))
+        if align is not None:
+            attrs += " align='%s'" % align
+
+        return '<a href="/w/file/view/%s" title="%s" ><img class="img-responsive" %s/></a>' % (cgi.escape(self.short_key, True), title, attrs)
 
 
 class WikiContent(db.Model):
@@ -368,3 +475,5 @@ class WikiRevision(db.Model):
     @classmethod
     def get_by_key(cls, key):
         return db.Model.get(db.Key(key))
+
+

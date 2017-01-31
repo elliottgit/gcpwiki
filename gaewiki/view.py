@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 # encoding=utf-8
 
 import logging
@@ -12,6 +13,7 @@ import access
 import model
 import settings
 import util
+import syntax
 
 
 DEFAULT_LABEL_BODY = u"""name: %(title)s
@@ -46,6 +48,8 @@ def render(template_name, data):
         data['settings'] = settings.get_all()
     if 'base' not in data:
         data['base'] = util.get_base_url()
+    if 'syntax' not in data:
+        data['syntax'] = syntax.get_page()
     return template.render(filename, data)
 
 
@@ -244,6 +248,15 @@ def view_image(img, user, is_admin):
     return render("view_image.html", data)
 
 
+def view_file(f, user, is_admin):
+    data = {
+        "file": f,
+        "user": user,
+        "is_admin": is_admin,
+    }
+    return render("view_file.html", data)
+
+
 def view_image_list(lst, user, is_admin):
     data = {
         "images": lst,
@@ -251,3 +264,11 @@ def view_image_list(lst, user, is_admin):
         "is_admin": is_admin,
     }
     return render("image_list.html", data)
+
+def view_file_list(lst, user, is_admin):
+    data = {
+        "files": lst,
+        "user": user,
+        "is_admin": is_admin
+    }
+    return render("file_list.html", data)

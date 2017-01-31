@@ -36,3 +36,8 @@ indexes:
   - name: updated
     direction: desc
 
+- kind: WikiUpload
+  properties:
+  - name: is_latest
+  - name: filename
+    direction: desc

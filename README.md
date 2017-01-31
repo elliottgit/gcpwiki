@@ -9,8 +9,17 @@ BGAEWiki is built on top of [GaeWiki](https://github.com/BauweBijl/gaewiki) wher
 Demo
 ====
 
-[Live DEMO with screenshots](http://bgaewiki.appspot.com)
+[Live DEMO with screenshots](http://vgaewiki.appspot.com)
 
+
+Install
+=======
+
+    git clone https://github.com/vladiuz1/bgaewiki
+    cd bgaewiki
+    gcloud config set project <your-gae-project>
+    gcloud app deploy index.yaml
+    gcloud app deploy app.yaml
 
 License
 =======
