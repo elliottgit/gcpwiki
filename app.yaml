@@ -1,5 +1,6 @@
-#application: bgaewiki
-#version: 0-1
+#application: gcpwiki
+#version: 1
+service: gcpwiki
 runtime: python27
 threadsafe: yes
 api_version: 1
